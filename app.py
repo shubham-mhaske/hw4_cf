@@ -2,303 +2,396 @@ import streamlit as st
 import plotly.graph_objects as go
 from geometry import Mesh
 import numpy as np
-from typing import Set
 
+# -----------------------------------------------------------------------------
+# 1. PAGE CONFIGURATION
+# -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Subdivision Surface Viewer",
+    page_title="SubSurf Pro",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
+    page_icon="🧊"
 )
 
-# Enhanced modern UI
+# -----------------------------------------------------------------------------
+# 2. CUSTOM CSS (The "Sleek Aesthetic")
+# -----------------------------------------------------------------------------
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
-    
-    * { font-family: 'Inter', sans-serif; }
-    
+    /* Global Theme Overrides */
     .stApp {
-        background-color: #1a202c;
+        background-color: #0e1117;
+        font-family: 'Inter', sans-serif;
     }
     
-    .main .block-container {
-        padding-top: 1rem;
-        max-width: 100%;
-    }
-    
+    /* Sidebar Styling */
     [data-testid="stSidebar"] {
-        background-color: #2d3748;
-        border-right: 1px solid #4a5568;
+        background-color: #161b22;
+        border-right: 1px solid #30363d;
     }
     
+    /* Headers */
+    h1, h2, h3 {
+        color: #e6edf3 !important;
+        font-weight: 700 !important;
+        letter-spacing: -0.5px;
+    }
+    
+    /* Metric Containers */
+    [data-testid="stMetricValue"] {
+        color: #58a6ff !important;
+        font-size: 1.5rem !important;
+    }
+    [data-testid="stMetricLabel"] {
+        color: #8b949e !important;
+    }
+    
+    /* Custom Card Containers */
+    .css-card {
+        background-color: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 12px;
+        padding: 20px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        margin-bottom: 1rem;
+    }
+    
+    /* Button Styling */
     .stButton > button {
         width: 100%;
-        background-color: #4a5568;
+        background-color: #238636;
         color: white;
-        border: 1px solid #4a5568;
-        border-radius: 8px;
-        font-weight: 600;
+        border: none;
+        border-radius: 6px;
+        padding: 0.5rem 1rem;
+        transition: all 0.2s;
     }
-    
     .stButton > button:hover {
-        background-color: #2d3748;
-        border: 1px solid #4a5568;
+        background-color: #2ea043;
+        box-shadow: 0 4px 12px rgba(35, 134, 54, 0.3);
     }
     
-    h1, h2, h3 {
-        color: white !important;
-        font-weight: 700 !important;
-    }
-    
-    .stMarkdown, p, label {
-        color: #cbd5e0 !important;
+    /* Secondary Buttons */
+    [data-testid="stExpander"] button {
+        border: 1px solid #30363d;
+        background-color: transparent;
     }
 </style>
 """, unsafe_allow_html=True)
 
-def plot_mesh(mesh: Mesh, show_shaded=True, show_wireframe=False, opacity=1.0, ambient=0.3, diffuse=0.8, specular=0.2, roughness=0.4, colorscale='Blues'):
-    V, tris = mesh.to_plotly_mesh()
-    fig = go.Figure()
+# -----------------------------------------------------------------------------
+# 3. HELPER FUNCTIONS
+# -----------------------------------------------------------------------------
+@st.cache_data
+def mesh_from_uploaded(uploaded) -> Mesh:
+    """Cache the heavy parsing of OBJ files."""
+    data = uploaded.getvalue().decode('utf-8')
+    return Mesh.load_obj_text(data)
+
+@st.cache_data
+def mesh_from_sample(filename) -> Mesh:
+    with open(f'assets/{filename}', 'r') as f:
+        return Mesh.load_obj_text(f.read())
+
+def plot_mesh(mesh: Mesh, 
+              show_shaded=True, 
+              show_wireframe=True, 
+              opacity=1.0, 
+              colorscale='Viridis',
+              wireframe_color='rgba(255, 255, 255, 0.3)',
+              bg_color='rgba(0,0,0,0)'):
     
+    # 1. Compute geometry data
+    V, tris = mesh.to_plotly_mesh()
+    
+    # 2. Compute Smooth Normals (The Secret to high-quality rendering)
+    # vertex_normals = mesh.compute_vertex_normals()
+    
+    x, y, z = V[:, 0], V[:, 1], V[:, 2]
+    i = [t[0] for t in tris]
+    j = [t[1] for t in tris]
+    k = [t[2] for t in tris]
+    
+    data = []
+
+    # 3. Shaded Surface Trace
     if show_shaded:
-        x, y, z = V[:, 0], V[:, 1], V[:, 2]
-        i = [t[0] for t in tris]
-        j = [t[1] for t in tris]
-        k = [t[2] for t in tris]
-        
         mesh3d = go.Mesh3d(
             x=x, y=y, z=z, i=i, j=j, k=k,
             opacity=opacity,
             colorscale=colorscale,
-            intensity=z,
-            flatshading=False,
+            intensity=z, # Color based on height
+            flatshading=False, # CRITICAL: False enables smooth interpolation
             lighting=dict(
-                ambient=ambient,
-                diffuse=diffuse,
-                specular=specular,
-                roughness=roughness,
+                ambient=0.4,
+                diffuse=0.7,
+                specular=0.5, # Plastic/Glossy look
+                roughness=0.1,
                 fresnel=0.2
             ),
-            lightposition=dict(x=2000, y=2000, z=3000),
-            hovertemplate='X: %{x:.3f}<br>Y: %{y:.3f}<br>Z: %{z:.3f}<extra></extra>'
+            lightposition=dict(x=100, y=200, z=500),
+            name='Surface',
+            showscale=False
         )
-        fig.add_trace(mesh3d)
+        data.append(mesh3d)
 
+    # 4. Wireframe Trace (Overlay)
     if show_wireframe:
         edges = mesh.get_edge_list()
-        crease_edges = {he.edge_id for he in mesh.halfedges if he.is_crease}
+        crease_ids = {he.edge_id for he in mesh.halfedges if he.is_crease}
         
-        regular_x, regular_y, regular_z = [], [], []
+        # Batch lines for performance
+        reg_x, reg_y, reg_z = [], [], []
         crease_x, crease_y, crease_z = [], [], []
         
         for eid, a, b in edges:
-            if eid in crease_edges:
-                crease_x.extend([V[a][0], V[b][0], None])
-                crease_y.extend([V[a][1], V[b][1], None])
-                crease_z.extend([V[a][2], V[b][2], None])
+            p1, p2 = V[a], V[b]
+            if eid in crease_ids:
+                crease_x.extend([p1[0], p2[0], None])
+                crease_y.extend([p1[1], p2[1], None])
+                crease_z.extend([p1[2], p2[2], None])
             else:
-                regular_x.extend([V[a][0], V[b][0], None])
-                regular_y.extend([V[a][1], V[b][1], None])
-                regular_z.extend([V[a][2], V[b][2], None])
-        
-        # Hologram style if only wireframe is shown
-        is_hologram = not show_shaded
-        
-        if is_hologram:
-            # Outer glow
-            fig.add_trace(go.Scatter3d(
-                x=regular_x, y=regular_y, z=regular_z,
+                reg_x.extend([p1[0], p2[0], None])
+                reg_y.extend([p1[1], p2[1], None])
+                reg_z.extend([p1[2], p2[2], None])
+
+        # Regular Edges
+        if reg_x:
+            data.append(go.Scatter3d(
+                x=reg_x, y=reg_y, z=reg_z,
                 mode='lines',
-                line=dict(color='rgba(0, 255, 255, 0.2)', width=10),
-                hoverinfo='none',
-                name='Glow'
+                line=dict(color=wireframe_color, width=2),
+                name='Edges', hoverinfo='none'
             ))
         
-        if regular_x:
-            line_color = 'rgba(0, 255, 255, 0.8)' if is_hologram else 'rgba(255, 255, 255, 0.6)'
-            fig.add_trace(go.Scatter3d(
-                x=regular_x, y=regular_y, z=regular_z,
-                mode='lines',
-                line=dict(color=line_color, width=2.5),
-                hoverinfo='skip',
-                name='Edges'
-            ))
-        
+        # Crease Edges (Highlighted)
         if crease_x:
-            fig.add_trace(go.Scatter3d(
+            data.append(go.Scatter3d(
                 x=crease_x, y=crease_y, z=crease_z,
                 mode='lines',
-                line=dict(color='rgba(255, 0, 0, 0.8)', width=4),
-                hoverinfo='skip',
-                name='Crease Edges'
+                line=dict(color='#ff4b4b', width=5),
+                name='Creases', hoverinfo='none'
             ))
 
-    fig.update_layout(
-        title=dict(text="3D Mesh Visualization", font=dict(size=20, color='white')),
+    # 5. Layout Configuration
+    layout = go.Layout(
+        paper_bgcolor=bg_color,
+        plot_bgcolor=bg_color,
+        margin=dict(l=0, r=0, t=0, b=0),
         scene=dict(
-            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, title=''),
-            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, title=''),
-            zaxis=dict(showgrid=False, zeroline=False, showticklabels=False, title=''),
+            xaxis=dict(visible=False),
+            yaxis=dict(visible=False),
+            zaxis=dict(visible=False),
             aspectmode='data',
-            bgcolor='rgba(10, 20, 40, 0.9)' if not show_shaded and show_wireframe else 'rgba(0,0,0,0)',
-            camera=dict(eye=dict(x=2, y=2, z=2))
+            camera=dict(projection=dict(type='perspective')),
+            bgcolor=bg_color
         ),
-        margin=dict(l=0, r=0, t=40, b=0),
-        paper_bgcolor='rgba(0,0,0,0)',
-        font=dict(color='white'),
-        showlegend=True
+        # UIREVISION: Keeps camera angle stable during updates
+        uirevision='constant',
+        modebar=dict(bgcolor='rgba(0,0,0,0)', color='white')
     )
-    return fig
-
-def mesh_from_uploaded(uploaded) -> Mesh:
-    data = uploaded.getvalue().decode('utf-8')
-    return Mesh.load_obj_text(data)
-
-def init_state():
-    if 'mesh' not in st.session_state:
-        st.session_state.mesh = None
-        st.session_state.base_mesh = None
-        st.session_state.history = []
-        st.session_state.crease_edges = set()
-
-init_state()
-
-st.sidebar.title("Controls")
-
-with st.sidebar.expander("Load Model", expanded=True):
-    uploaded = st.file_uploader("Upload OBJ", type=['obj'])
-    if uploaded:
-        mesh = mesh_from_uploaded(uploaded)
-        st.session_state.mesh = st.session_state.base_mesh = mesh
-        st.session_state.history = [mesh]
-        st.session_state.crease_edges = set()
-
-    st.markdown("**Sample Models**")
     
-    samples = ["Cube", "Triangle", "Octahedron", "Pyramid", "Icosahedron"]
-    for sample in samples:
-        if st.button(sample, use_container_width=True):
-            try:
-                with open(f'assets/{sample.lower()}.obj', 'r') as f:
-                    mesh = Mesh.load_obj_text(f.read())
+    return go.Figure(data=data, layout=layout)
+
+# -----------------------------------------------------------------------------
+# 4. STATE MANAGEMENT
+# -----------------------------------------------------------------------------
+if 'mesh' not in st.session_state:
+    st.session_state.mesh = None
+    st.session_state.base_mesh = None
+    st.session_state.history = []
+    st.session_state.crease_edges = set()
+
+# -----------------------------------------------------------------------------
+# 5. SIDEBAR UI
+# -----------------------------------------------------------------------------
+with st.sidebar:
+    st.title("🧊 SubSurf Pro")
+    
+    # Top-level tabs for better organization
+    tab_model, tab_edit, tab_view = st.tabs(["📂 Model", "⚡ Edit", "🎨 View"])
+    
+    # --- TAB 1: MODEL (Import & Generate) ---
+    with tab_model:
+        st.markdown("### Source")
+        source_type = st.radio("Input Type", ["Upload", "Primitive", "Library"], label_visibility="collapsed")
+        
+        if source_type == "Upload":
+            uploaded = st.file_uploader("Drop OBJ file", type=['obj'])
+            if uploaded:
+                if st.button("Load Uploaded File", type="primary"):
+                    mesh = mesh_from_uploaded(uploaded)
                     st.session_state.mesh = st.session_state.base_mesh = mesh
                     st.session_state.history = [mesh]
                     st.session_state.crease_edges = set()
-            except FileNotFoundError:
-                st.error(f"Sample model '{sample.lower()}.obj' not found.")
+                    st.rerun()
 
-with st.sidebar.expander("Generate Model"):
-    if st.button("Torus", use_container_width=True):
-        mesh = Mesh.create_torus()
-        st.session_state.mesh = st.session_state.base_mesh = mesh
-        st.session_state.history = [mesh]
-    if st.button("Icosphere", use_container_width=True):
-        mesh = Mesh.create_icosphere()
-        st.session_state.mesh = st.session_state.base_mesh = mesh
-        st.session_state.history = [mesh]
+        elif source_type == "Primitive":
+            prim_type = st.selectbox("Shape", ["Cube", "Torus", "Icosphere", "Cylinder", "Grid"])
+            
+            if prim_type == "Cube":
+                size = st.slider("Size", 0.1, 5.0, 1.0)
+                if st.button("Generate Cube"):
+                    mesh = Mesh.create_cube(size)
+                    st.session_state.mesh = st.session_state.base_mesh = mesh
+                    st.session_state.history = [mesh]
+                    st.rerun()
+                    
+            elif prim_type == "Torus":
+                r_maj = st.slider("Major Radius", 0.5, 5.0, 1.0)
+                r_min = st.slider("Minor Radius", 0.1, 2.0, 0.3)
+                seg_maj = st.slider("Major Segments", 3, 64, 32)
+                seg_min = st.slider("Minor Segments", 3, 32, 16)
+                if st.button("Generate Torus"):
+                    mesh = Mesh.create_torus(r_maj, r_min, seg_maj, seg_min)
+                    st.session_state.mesh = st.session_state.base_mesh = mesh
+                    st.session_state.history = [mesh]
+                    st.rerun()
+                    
+            elif prim_type == "Icosphere":
+                rad = st.slider("Radius", 0.1, 5.0, 1.0)
+                sub = st.slider("Subdivisions", 0, 5, 2)
+                if st.button("Generate Icosphere"):
+                    mesh = Mesh.create_icosphere(rad, sub)
+                    st.session_state.mesh = st.session_state.base_mesh = mesh
+                    st.session_state.history = [mesh]
+                    st.rerun()
+            
+            elif prim_type == "Cylinder":
+                rad = st.slider("Radius", 0.1, 5.0, 1.0)
+                h = st.slider("Height", 0.1, 10.0, 2.0)
+                seg = st.slider("Segments", 3, 64, 16)
+                if st.button("Generate Cylinder"):
+                    mesh = Mesh.create_cylinder(rad, h, seg)
+                    st.session_state.mesh = st.session_state.base_mesh = mesh
+                    st.session_state.history = [mesh]
+                    st.rerun()
+                    
+            elif prim_type == "Grid":
+                w = st.slider("Width", 1.0, 10.0, 2.0)
+                h = st.slider("Height", 1.0, 10.0, 2.0)
+                seg = st.slider("Segments", 1, 20, 4)
+                if st.button("Generate Grid"):
+                    mesh = Mesh.create_grid(w, h, seg, seg)
+                    st.session_state.mesh = st.session_state.base_mesh = mesh
+                    st.session_state.history = [mesh]
+                    st.rerun()
 
-with st.sidebar.expander("Subdivision", expanded=True):
-    is_triangle_mesh = st.session_state.mesh.is_triangle_mesh() if st.session_state.mesh else False
-    
-    algo_options = ['Catmull-Clark', 'Doo-Sabin']
-    if is_triangle_mesh:
-        algo_options.extend(['Loop', 'Sqrt(3)'])
-    
-    algo = st.selectbox("Algorithm", algo_options)
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button('Subdivide', use_container_width=True):
-            if st.session_state.mesh:
+        elif source_type == "Library":
+            samples = ["Cube", "Octahedron", "Icosahedron", "Pyramid", "Triangle"]
+            selected_sample = st.selectbox("Select Sample", samples)
+            if st.button(f"Load {selected_sample}"):
                 try:
-                    with st.spinner('Subdividing...'):
-                        if algo == 'Catmull-Clark':
-                            new_mesh = st.session_state.mesh.subdivide_catmull_clark(st.session_state.crease_edges)
-                        elif algo == 'Loop':
-                            new_mesh = st.session_state.mesh.subdivide_loop(st.session_state.crease_edges)
-                        elif algo == "Sqrt(3)":
-                            new_mesh = st.session_state.mesh.subdivide_sqrt3()
-                        else:
-                            new_mesh = st.session_state.mesh.subdivide_doo_sabin()
-                        st.session_state.mesh = new_mesh
-                        st.session_state.history.append(new_mesh)
-                except Exception as e:
-                    st.error(f"Error: {e}")
-            else:
-                st.warning('Load a mesh first.')
-    with col2:
-        if st.button('Reset', use_container_width=True):
-            if st.session_state.base_mesh:
-                st.session_state.mesh = st.session_state.base_mesh
-                st.session_state.history = [st.session_state.base_mesh]
-                st.session_state.crease_edges = set()
+                    mesh = mesh_from_sample(f"{selected_sample.lower()}.obj")
+                    st.session_state.mesh = st.session_state.base_mesh = mesh
+                    st.session_state.history = [mesh]
+                    st.session_state.crease_edges = set()
+                    st.rerun()
+                except:
+                    st.toast(f"{selected_sample} not found in assets", icon="⚠️")
 
-with st.sidebar.expander("Creases & Export"):
-    if st.session_state.mesh:
-        edges = st.session_state.mesh.get_edge_list()
-        edge_options = [f"{eid}: {a}-{b}" for eid, a, b in edges]
-        selected = st.multiselect('Crease edges', edge_options, default=[f"{i}: {a}-{b}" for i,a,b in edges if i in st.session_state.crease_edges])
-        
-        ids = {int(s.split(':')[0]) for s in selected}
-        if st.button('Apply Creases', use_container_width=True):
-            st.session_state.crease_edges = ids
-            st.session_state.mesh.mark_crease_edges(ids)
-            st.rerun()
-        
-        obj_text = st.session_state.mesh.to_obj_text()
-        st.download_button('Download OBJ', obj_text, file_name='mesh.obj', mime='text/plain', use_container_width=True)
-
-st.title("Subdivision Surface Viewer")
-
-col1, col2 = st.columns([3, 1])
-
-with col1:
-    st.header("3D Visualization")
-    
-    with st.expander("Visualization Settings", expanded=True):
-        c1, c2 = st.columns(2)
-        with c1:
-            show_shaded = st.checkbox('Shaded', value=True)
-        with c2:
-            show_wireframe = st.checkbox('Wireframe', value=True)
-
-        if show_shaded:
+    # --- TAB 2: EDIT (Subdivide & Crease) ---
+    with tab_edit:
+        if st.session_state.mesh:
+            st.markdown("### Subdivision")
+            
+            is_tri = st.session_state.mesh.is_triangle_mesh()
+            algos = ['Catmull-Clark', 'Doo-Sabin']
+            if is_tri: algos = ['Loop', 'Sqrt(3)'] + algos
+            
+            selected_algo = st.selectbox("Algorithm", algos)
+            
             c1, c2 = st.columns(2)
             with c1:
-                opacity = st.slider("Opacity", 0.0, 1.0, 1.0)
-                ambient = st.slider("Ambient", 0.0, 1.0, 0.3)
+                if st.button("⚡ Subdivide", type="primary"):
+                    with st.spinner("Processing..."):
+                        m = st.session_state.mesh
+                        creases = st.session_state.crease_edges
+                        try:
+                            if selected_algo == 'Catmull-Clark':
+                                nm = m.subdivide_catmull_clark(creases)
+                            elif selected_algo == 'Loop':
+                                nm = m.subdivide_loop(creases)
+                            elif selected_algo == 'Sqrt(3)':
+                                nm = m.subdivide_sqrt3()
+                            else:
+                                nm = m.subdivide_doo_sabin()
+                            
+                            st.session_state.mesh = nm
+                            st.session_state.history.append(nm)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(str(e))
             with c2:
-                diffuse = st.slider("Diffuse", 0.0, 1.0, 0.8)
-                specular = st.slider("Specular", 0.0, 1.0, 0.2)
+                if st.button("↩ Undo", disabled=len(st.session_state.history) <= 1):
+                    if len(st.session_state.history) > 1:
+                        st.session_state.history.pop()
+                        st.session_state.mesh = st.session_state.history[-1]
+                        st.rerun()
             
-            roughness = st.slider("Roughness", 0.0, 1.0, 0.4)
-            colorscale = st.selectbox("Colorscale", ['Blues', 'Greys', 'Viridis', 'Cividis', 'Plasma', 'Turbo', 'Rainbow', 'Ice', 'Electric'])
-        else:
-            opacity = 1.0
-            ambient = 0.3
-            diffuse = 0.8
-            specular = 0.2
-            roughness = 0.4
-            colorscale = 'Blues'
+            if st.button("↺ Reset to Original", use_container_width=True):
+                st.session_state.mesh = st.session_state.base_mesh
+                st.session_state.history = [st.session_state.base_mesh]
+                st.rerun()
 
-    if st.session_state.mesh:
-        fig = plot_mesh(st.session_state.mesh, show_shaded, show_wireframe, opacity, ambient, diffuse, specular, roughness, colorscale)
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info('Load or generate a model from the sidebar to start.')
-
-with col2:
-    st.header("Mesh Statistics")
-    if st.session_state.mesh:
-        st.metric("Vertices", len(st.session_state.mesh.vertices))
-        st.metric("Faces", len(st.session_state.mesh.faces))
-        st.metric("Edges", len(st.session_state.mesh.edge_map))
-        st.metric("Crease Edges", len(st.session_state.crease_edges))
-        st.metric("Subdivision Level", len(st.session_state.history) - 1)
-        
-        if st.session_state.mesh.is_triangle_mesh():
-            st.success("Triangle Mesh")
+            st.markdown("---")
+            st.markdown("### Feature Edges")
+            
+            edges = st.session_state.mesh.get_edge_list()
+            opts = [f"{eid}: {a}-{b}" for eid, a, b in edges]
+            defaults = [f"{i}: {a}-{b}" for i,a,b in edges if i in st.session_state.crease_edges]
+            
+            sel = st.multiselect("Select Hard Edges", opts, default=defaults)
+            new_creases = {int(s.split(':')[0]) for s in sel}
+            
+            if new_creases != st.session_state.crease_edges:
+                if st.button("Apply Creases"):
+                    st.session_state.crease_edges = new_creases
+                    st.session_state.mesh.mark_crease_edges(new_creases)
+                    st.rerun()
         else:
-            st.info("Polygon Mesh")
-    else:
-        st.write("No mesh loaded.")
+            st.info("Load a model first")
+
+    # --- TAB 3: VIEW (Visualization & Export) ---
+    with tab_view:
+        if st.session_state.mesh:
+            st.markdown("### Display Settings")
+            show_shaded = st.toggle("Surface", True)
+            show_wire = st.toggle("Wireframe", True)
+            opacity = st.slider("Opacity", 0.0, 1.0, 1.0)
+            theme = st.selectbox("Color Theme", ["Viridis", "Plasma", "Blues", "Magma", "Inferno", "Cividis"])
+            wire_color = st.color_picker("Wireframe Color", "#FFFFFF")
+            bg_color = st.color_picker("Background Color", "#0e1117")
+            
+            st.markdown("---")
+            st.markdown("### Export")
+            obj_data = st.session_state.mesh.to_obj_text()
+            st.download_button(
+                label="💾 Download OBJ",
+                data=obj_data,
+                file_name="subdivided_mesh.obj",
+                mime="text/plain",
+                use_container_width=True
+            )
+        else:
+            st.info("Load a model first")
+
+# -----------------------------------------------------------------------------
+# 6. MAIN AREA
+# -----------------------------------------------------------------------------
+
+# Top Metrics Row
+if st.session_state.mesh:
+    m = st.session_state.mesh
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Vertices", len(m.vertices))
+    c2.metric("Faces", len(m.faces))
+    c3.metric("Type", "Triangles" if m.is_triangle_mesh() else "Polygons")
+    c4.metric("Level", len(st.session_state.history)-1)
+
+# Main Viewport
+if st.session_state.mesh:
+    fig = plot_mesh(st.session_state.mesh, show_shaded, show_wire, opacity, theme, wire_color, bg_color)
+    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True})
+else:
+    st.info("👈 Load a model to begin")
