@@ -1,0 +1,10 @@
+# Simple tetrahedron (triangle mesh)
+v 0 0 0
+v 1 0 0
+v 0.5 0.866 0
+v 0.5 0.2887 0.8165
+
+f 1 2 3
+f 1 2 4
+f 2 3 4
+f 3 1 4
